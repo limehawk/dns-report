@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# Install Ruby and WPScan deps
+RUN apt-get update && apt-get install -y ruby-full build-essential zlib1g-dev && \
+    gem install wpscan
+
 WORKDIR /app
 
 COPY requirements.txt .
