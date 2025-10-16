@@ -70,7 +70,25 @@ def analyze_records(domain):
     
     return dmarc, dkim, spf
 
-def generate_pdf_report(domain, dmarc, dkim, spf):
+def compute_score(dmarc, dkim, spf):
+    score = 0
+    if dmarc["present"]:
+        if dmarc["policy"] == "reject":
+            score += 40
+        elif dmarc["policy"] == "quarantine":
+            score += 30
+        else:
+            score += 20
+    if dkim["present"]:
+        score += 30
+    if spf["present"]:
+        if spf["policy"] == "-all":
+            score += 30
+        else:
+            score += 20
+    return min(score, 100)
+
+def generate_pdf_report(domain, dmarc, dkim, spf, score):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -78,6 +96,7 @@ def generate_pdf_report(domain, dmarc, dkim, spf):
     
     elements.append(Paragraph(f"{MSP_NAME} DNS Report", styles['Title']))
     elements.append(Paragraph(f"Domain: {domain}", styles['Heading2']))
+    elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
     elements.append(Spacer(1, 0.2 * inch))
     
     # DMARC Table with Reasoning
@@ -129,14 +148,21 @@ def generate_pdf_report(domain, dmarc, dkim, spf):
 st.title(f"🔒 {MSP_NAME} DNS Checker (Direct DNS Queries)")
 st.markdown("**Sales Tool**: Enter domain → Get PDF → Pitch security services! (No API needed)")
 
-domain = st.text_input("Domain", placeholder="example.com")
+with st.form(key="domain_form"):
+    domain = st.text_input("Domain", placeholder="example.com")
+    submit_button = st.form_submit_button("🚀 Generate Report")
 
-if st.button("🚀 Generate Report", type="primary"):
+if submit_button:
     if not domain:
         st.error("Enter a domain!")
     else:
         with st.spinner("🔍 Querying DNS records..."):
             dmarc, dkim, spf = analyze_records(domain)
+            score = compute_score(dmarc, dkim, spf)
+            
+            # Overall Score
+            st.metric("Overall DNS Security Score", f"{score}%")
+            st.progress(score / 100)
             
             # Visual Enhancements
             col1, col2, col3 = st.columns(3)
@@ -171,7 +197,7 @@ if st.button("🚀 Generate Report", type="primary"):
             st.markdown(spf["recommendation"])
             
             # PDF Download
-            pdf = generate_pdf_report(domain, dmarc, dkim, spf)
+            pdf = generate_pdf_report(domain, dmarc, dkim, spf, score)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
 st.markdown("---")
