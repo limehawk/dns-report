@@ -61,7 +61,7 @@ def analyze_records(domain):
                 spf["policy"] = "~all"
                 spf["reasoning"] = "~all soft-fails but allows some spoofing. Upgrade for full protection."
                 spf["recommendation"] = "Switch to -all to lock it down."
-    
+
     dmarc_records = fetch_txt_record(domain, "_dmarc")
     dmarc = {"present": False, "policy": "Missing", "reasoning": "No DMARC means no email authentication—clients could be spoofed easily.", "recommendation": "Add v=DMARC1; p=reject for robust defense"}
     for txt in dmarc_records:
@@ -72,7 +72,7 @@ def analyze_records(domain):
             dmarc["policy"] = details.get("p", "none")
             dmarc["reasoning"] = f"{dmarc['policy']} policy detected—{('great for blocking fakes' if dmarc['policy'] == 'reject' else 'vulnerable to spoofing, upgrade needed')}."
             dmarc["recommendation"] = "Monitor reports" if dmarc["policy"] == "reject" else "Upgrade to reject for max security."
-    
+
     common_selectors = ["google", "default", "selector1", "selector2"]
     dkim_count = 0
     dkim_selectors = []
@@ -87,7 +87,7 @@ def analyze_records(domain):
     dkim = {"present": dkim_present, "count": dkim_count, "selectors": dkim_selectors,
             "reasoning": "DKIM present with valid records, enhancing email trust." if dkim_present else "DKIM missing—emails lack sender verification, hurting trust.",
             "recommendation": "Maintain and rotate keys annually" if dkim_present else "Add selectors for verified sending"}
-    
+
     return dmarc, dkim, spf
 
 def compute_score(dmarc, dkim, spf):
@@ -149,7 +149,7 @@ def analyze_wordpress_vulnerabilities(domain, force=False):
     api_token = os.getenv('WPSCAN_API_TOKEN')
     if not api_token:
         return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
-    
+
     subdomains = ['', 'www', 'blog']
     for sub in subdomains:
         website = f"https://{sub}.{domain}" if sub else f"https://{domain}"
@@ -162,65 +162,66 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
     elements = []
-    
+
     elements.append(Paragraph(f"{MSP_NAME} DNS Report", styles['Title']))
     elements.append(Paragraph(f"Domain: {domain}", styles['Heading2']))
     elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
     elements.append(Spacer(1, 0.2 * inch))
-    
+
     if cloudflare_detected:
         elements.append(Paragraph("⚠️ Cloudflare Proxy Detected", styles['Heading3']))
         elements.append(Paragraph("This site uses a Cloudflare proxy, which may affect scan accuracy. Consider scanning the origin IP or contacting the site admin.", styles['Normal']))
         elements.append(Spacer(1, 0.2 * inch))
-    
+
     elements.append(Paragraph("DMARC Analysis", styles['Heading3']))
-    dmarc_data = [["Status", "Present" if dmarc["present"] else "Missing"], 
-                  ["Policy", dmarc["policy"]], 
-                  ["Reasoning", dmarc["reasoning"]], 
+    dmarc_data = [["Status", "Present" if dmarc["present"] else "Missing"],
+                  ["Policy", dmarc["policy"]],
+                  ["Reasoning", dmarc["reasoning"]],
                   ["Action", dmarc["recommendation"]]]
     t = Table(dmarc_data)
-    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
                           ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                           ('GRID', (0,0), (-1,-1), 1, colors.black)]))
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
-    
+
     elements.append(Paragraph("DKIM Analysis", styles['Heading3']))
-    dkim_data = [["Status", "Present" if dkim["present"] else "Missing"], 
-                 ["Records", dkim["count"]], 
-                 ["Reasoning", dkim["reasoning"]], 
+    dkim_data = [["Status", "Present" if dkim["present"] else "Missing"],
+                 ["Records", dkim["count"]],
+                 ["Reasoning", dkim["reasoning"]],
                  ["Action", dkim["recommendation"]]]
     if dkim["selectors"]:
         dkim_data.append(["Selectors", ", ".join(dkim["selectors"])])
     t = Table(dkim_data)
-    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
                           ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                           ('GRID', (0,0), (-1,-1), 1, colors.black)]))
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
-    
+
     elements.append(Paragraph("SPF Analysis", styles['Heading3']))
-    spf_data = [["Status", "Present" if spf["present"] else "Missing"], 
-                ["Policy", spf["policy"]], 
-                ["Reasoning", spf["reasoning"]], 
+    spf_data = [["Status", "Present" if spf["present"] else "Missing"],
+                ["Policy", spf["policy"]],
+                ["Reasoning", spf["reasoning"]],
                 ["Action", spf["recommendation"]]]
     t = Table(spf_data)
-    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
                           ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                           ('GRID', (0,0), (-1,-1), 1, colors.black)]))
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
-    
+
     if wordpress_analysis:
         elements.append(Paragraph("WordPress Vulnerability Analysis", styles['Heading3']))
         if "error" in wordpress_analysis:
             wp_data = [["Status", "Error"], ["Details", "WPScan encountered an issue. Contact LimeHawk MSP for a manual audit."]]
         else:
-            outdated_str = ", ".join(wp_analysis.get("outdated_plugins", [])) or "None"
-            vulns_str = ", ".join(wp_analysis.get("vulnerabilities", [])) or "None"
+            # *** FIX WAS APPLIED HERE ***
+            outdated_str = ", ".join(wordpress_analysis.get("outdated_plugins", [])) or "None"
+            vulns_str = ", ".join(wordpress_analysis.get("vulnerabilities", [])) or "None"
             wp_data = [["Outdated Plugins", outdated_str], ["Vulnerabilities", vulns_str]]
         t = Table(wp_data)
-        t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+        t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
                               ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                               ('GRID', (0,0), (-1,-1), 1, colors.black)]))
         elements.append(t)
@@ -229,12 +230,12 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
         elements.append(Paragraph("WordPress Analysis", styles['Heading3']))
         wp_data = [["Status", "Not Detected"], ["Recommendation", "No WP found on root/www/blog subdomains. If WP is on a custom subdomain, provide it for a scan."]]
         t = Table(wp_data)
-        t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+        t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey),
                               ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                               ('GRID', (0,0), (-1,-1), 1, colors.black)]))
         elements.append(t)
         elements.append(Spacer(1, 0.2 * inch))
-    
+
     elements.append(Paragraph(f"{MSP_CONTACT} - Let us optimize your DNS and website security!", styles['Normal']))
     doc.build(elements)
     buffer.seek(0)
@@ -257,14 +258,14 @@ if submit_button:
         with st.spinner("🔍 Querying DNS records and scanning website..."):
             dmarc, dkim, spf = analyze_records(domain)
             score = compute_score(dmarc, dkim, spf)
-            
+
             cloudflare_detected = is_cloudflare_proxy(domain)
-            
+
             wordpress_analysis = analyze_wordpress_vulnerabilities(domain, force=force_wp)
-            
+
             st.metric("Overall DNS Security Score", f"{score}%")
             st.progress(score / 100)
-            
+
             col1, col2, col3 = st.columns(3)
             with col1:
                 dmarc_status = "✅" if dmarc["present"] else "❌"
@@ -278,10 +279,10 @@ if submit_button:
                 spf_status = "✅" if spf["present"] else "❌"
                 st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
                 st.progress(100 if spf["present"] else 0)
-            
+
             if cloudflare_detected:
                 st.warning("⚠️ Cloudflare Proxy Detected: Scan accuracy may be affected. Consider scanning the origin IP or contacting the site admin.")
-            
+
             st.subheader("📊 Detailed Report")
             col1, col2 = st.columns(2)
             with col1:
@@ -297,7 +298,7 @@ if submit_button:
             st.markdown("**SPF**")
             st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
             st.markdown(spf["recommendation"])
-            
+
             if wordpress_analysis:
                 st.subheader("WordPress Vulnerability Analysis")
                 if "error" in wordpress_analysis:
@@ -312,7 +313,7 @@ if submit_button:
             else:
                 st.subheader("WordPress Analysis")
                 st.info("No WordPress detected on root/www/blog subdomains. Check 'Force WPScan' for custom sites or provide the exact URL.")
-            
+
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, cloudflare_detected)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
