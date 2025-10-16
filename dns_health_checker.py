@@ -2,8 +2,7 @@ import streamlit as st
 import dns.resolver
 import re
 import requests
-import json
-import subprocess
+from wpvulndb import API
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet
@@ -101,27 +100,22 @@ def is_wordpress(website):
         pass
     return False
 
-def run_wpscan(website):
+def analyze_wordpress_vulnerabilities(website):
+    if not is_wordpress(website):
+        return None
     try:
-        result = subprocess.run(['wpscan', '--url', website, '--format', 'json', '--no-banner'], capture_output=True, text=True, timeout=60)
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            vulnerabilities = []
-            outdated_plugins = []
-            if 'plugins' in data:
-                for plugin in data['plugins'].values():
-                    if 'outdated' in plugin and plugin['outdated']:
-                        outdated_plugins.append(plugin['slug'])
-                    if 'vulnerabilities' in plugin:
-                        vulnerabilities.extend(plugin['vulnerabilities'])
-            return {
-                "outdated_plugins": outdated_plugins,
-                "vulnerabilities": vulnerabilities
-            }
-        else:
-            return {"error": result.stderr}
+        api = API()
+        response = requests.get(website, timeout=10)
+        html = response.text.lower()
+        plugins = re.findall(r'wp-content/plugins/([^/"]+)', html)
+        vulnerabilities = {}
+        for plugin in set(plugins):
+            vulns = api.get_vulnerabilities(plugin)
+            if vulns and 'vulnerabilities' in vulns:
+                vulnerabilities[plugin] = [v for v in vulns['vulnerabilities'] if v.get('is_fixed') == 0]
+        return vulnerabilities if vulnerabilities else {"note": "No known vulnerabilities detected or plugins not identifiable."}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Error analyzing vulnerabilities: {str(e)}"}
 
 def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     buffer = BytesIO()
@@ -175,11 +169,16 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # WordPress Analysis
+    # WordPress Vulnerability Analysis
     if wordpress_analysis:
         elements.append(Paragraph("WordPress Vulnerability Analysis", styles['Heading3']))
-        wp_data = [["Outdated Plugins", ", ".join(wordpress_analysis.get("outdated_plugins", [])) or "None found"], 
-                   ["Vulnerabilities", str(len(wordpress_analysis.get("vulnerabilities", []))) + " found" if wordpress_analysis.get("vulnerabilities") else "None found"]]
+        if "error" in wordpress_analysis:
+            wp_data = [["Status", "Error"], ["Details", wordpress_analysis["error"]]]
+        elif "note" in wordpress_analysis:
+            wp_data = [["Status", "Checked"], ["Details", wordpress_analysis["note"]]]
+        else:
+            wp_items = [[f"{plugin} (Vulns: {len(vulns)})", "; ".join(v["title"] for v in vulns)] for plugin, vulns in wordpress_analysis.items()]
+            wp_data = [["Plugin", "Vulnerabilities"]] + wp_items if wp_items else [["Status", "No vulnerabilities detected"]]
         t = Table(wp_data)
         t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
                               ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
@@ -187,7 +186,7 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
         elements.append(t)
         elements.append(Spacer(1, 0.2 * inch))
     
-    elements.append(Paragraph(f"{MSP_CONTACT} - Let us optimize your DNS security!", styles['Normal']))
+    elements.append(Paragraph(f"{MSP_CONTACT} - Let us optimize your DNS and website security!", styles['Normal']))
     doc.build(elements)
     buffer.seek(0)
     return buffer
@@ -209,10 +208,8 @@ if submit_button:
             dmarc, dkim, spf = analyze_records(domain)
             score = compute_score(dmarc, dkim, spf)
             
-            # WordPress Check and Scan
-            wordpress_analysis = None
-            if is_wordpress(website):
-                wordpress_analysis = run_wpscan(website)
+            # WordPress Check and Vulnerability Analysis
+            wordpress_analysis = analyze_wordpress_vulnerabilities(website)
             
             # Overall Score
             st.metric("Overall DNS Security Score", f"{score}%")
@@ -251,15 +248,16 @@ if submit_button:
             st.markdown(spf["recommendation"])
             
             if wordpress_analysis:
-                st.subheader("WordPress Vulnerability Scan")
-                st.write("Outdated Plugins:", ", ".join(wordpress_analysis.get("outdated_plugins", [])) or "None")
-                st.write("Vulnerabilities Found:", len(wordpress_analysis.get("vulnerabilities", [])))
+                st.subheader("WordPress Vulnerability Analysis")
                 if "error" in wordpress_analysis:
                     st.error(wordpress_analysis["error"])
+                elif "note" in wordpress_analysis:
+                    st.info(wordpress_analysis["note"])
+                else:
+                    for plugin, vulns in wordpress_analysis.items():
+                        st.warning(f"{plugin} has {len(vulns)} unfixed vulnerabilities: {', '.join(v['title'] for v in vulns)}")
             
             # PDF Download
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
-st.markdown("---")
-st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries")
