@@ -2,4 +2,3 @@ streamlit==1.50.0
 requests==2.31.0
 reportlab==4.0.8
 dnspython==2.6.1
-wpvulndb==0.5
