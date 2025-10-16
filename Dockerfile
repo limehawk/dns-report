@@ -2,7 +2,8 @@ FROM python:3.11-slim
 
 # Install Ruby and WPScan deps, including runtime libcurl
 RUN apt-get update && apt-get install -y ruby-full build-essential zlib1g-dev libcurl4 libcurl4-openssl-dev && \
-    gem install wpscan
+    gem install wpscan && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
