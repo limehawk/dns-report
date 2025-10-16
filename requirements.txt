@@ -1,4 +1,5 @@
-streamlit==1.50.0  # Upgrade for latest features and stability
-dnspython==2.6.1   # Matches current, stable version
-reportlab==4.2.0   # Upgrade for full compatibility with PDF features
-# requests==2.31.0  # Commented out—remove unless needed elsewhere
+streamlit==1.50.0
+requests==2.31.0
+reportlab==4.0.8
+dnspython==2.6.1
+wpvulndb-api==1.2.2
