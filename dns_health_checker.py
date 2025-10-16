@@ -201,59 +201,61 @@ if submit_button:
         # Sanitize domain input
         domain = urlparse(domain_input).netloc if '://' in domain_input else domain_input.strip('/')
         domain = domain.lstrip('www.')  # Optional: strip www. for cleaner DNS lookups
-        
-        with st.spinner("🔍 Querying DNS records..."):
-            dmarc, dkim, spf, mx = analyze_records(domain)
-            score = compute_score(dmarc, dkim, spf, mx)
-            
-            # Overall Score
-            st.metric("Overall DNS Security Score", f"{score}%")
-            st.progress(score / 100)
-            
-            # Visual Enhancements
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                dmarc_status = "✅" if dmarc["present"] else "❌"
-                st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
-                st.progress(100 if dmarc["present"] else 0)
-            with col2:
-                dkim_status = "✅" if dkim["present"] else "❌"
-                st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
-                st.progress(100 if dkim["present"] else 0)
-            with col3:
-                spf_status = "✅" if spf["present"] else "❌"
-                st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
-                st.progress(100 if spf["present"] else 0)
-            with col4:
-                mx_status = "✅" if mx["present"] else "❌"
-                st.metric(label="MX", value=mx_status, delta=mx["recommendation"] if not mx["present"] else None, delta_color="inverse")
-                st.progress(100 if mx["present"] else 0)
-            
-            # Detailed Tables
-            st.subheader("📊 Detailed Report")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**DMARC**")
-                st.table({k: [v] for k, v in dmarc.items() if k != "recommendation"})
-                st.markdown(dmarc["recommendation"])
-            with col2:
-                st.markdown("**DKIM**")
-                st.table({k: [v] for k, v in dkim.items() if k not in ["selectors", "recommendation"]})
-                st.markdown(dkim["recommendation"])
-                if dkim["selectors"]:
-                    st.write("Selectors:", dkim["selectors"])
-            st.markdown("**SPF**")
-            st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
-            st.markdown(spf["recommendation"])
-            st.markdown("**MX**")
-            st.table({k: [v] for k, v in mx.items() if k not in ["records"]})
-            if mx["records"]:
-                st.write("Records:", "\n".join([f"Priority {p}: {t}" for p, t in mx["records"]]))
-            st.markdown(mx["recommendation"])
-            
-            # PDF Download
-            pdf = generate_pdf_report(domain, dmarc, dkim, spf, mx, score)
-            st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
+        if not domain:
+            st.error("Invalid domain format. Please enter a valid domain (e.g., example.com).")
+        else:
+            with st.spinner("🔍 Querying DNS records..."):
+                dmarc, dkim, spf, mx = analyze_records(domain)
+                score = compute_score(dmarc, dkim, spf, mx)
+                
+                # Overall Score
+                st.metric("Overall DNS Security Score", f"{score}%")
+                st.progress(score / 100)
+                
+                # Visual Enhancements
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    dmarc_status = "✅" if dmarc["present"] else "❌"
+                    st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
+                    st.progress(100 if dmarc["present"] else 0)
+                with col2:
+                    dkim_status = "✅" if dkim["present"] else "❌"
+                    st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
+                    st.progress(100 if dkim["present"] else 0)
+                with col3:
+                    spf_status = "✅" if spf["present"] else "❌"
+                    st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
+                    st.progress(100 if spf["present"] else 0)
+                with col4:
+                    mx_status = "✅" if mx["present"] else "❌"
+                    st.metric(label="MX", value=mx_status, delta=mx["recommendation"] if not mx["present"] else None, delta_color="inverse")
+                    st.progress(100 if mx["present"] else 0)
+                
+                # Detailed Tables
+                st.subheader("📊 Detailed Report")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**DMARC**")
+                    st.table({k: [v] for k, v in dmarc.items() if k != "recommendation"})
+                    st.markdown(dmarc["recommendation"])
+                with col2:
+                    st.markdown("**DKIM**")
+                    st.table({k: [v] for k, v in dkim.items() if k not in ["selectors", "recommendation"]})
+                    st.markdown(dkim["recommendation"])
+                    if dkim["selectors"]:
+                        st.write("Selectors:", dkim["selectors"])
+                st.markdown("**SPF**")
+                st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
+                st.markdown(spf["recommendation"])
+                st.markdown("**MX**")
+                st.table({k: [v] for k, v in mx.items() if k not in ["records"]})
+                if mx["records"]:
+                    st.write("Records:", "\n".join([f"Priority {p}: {t}" for p, t in mx["records"]]))
+                st.markdown(mx["recommendation"])
+                
+                # PDF Download
+                pdf = generate_pdf_report(domain, dmarc, dkim, spf, mx, score)
+                st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
 st.markdown("---")
 st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries")
