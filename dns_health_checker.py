@@ -31,6 +31,28 @@ def fetch_txt_record(domain, subdomain=""):
         st.error(f"❌ DNS Error: {e}")
         return []
 
+def is_cloudflare_proxy(domain):
+    try:
+        # Resolve A record
+        answers = dns.resolver.resolve(domain, 'A')
+        ip = answers[0].to_text()
+        # Check against known Cloudflare IP ranges (simplified)
+        cloudflare_ranges = ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22']
+        for range in cloudflare_ranges:
+            if '/' in range:
+                network, mask = range.split('/')
+                # Basic CIDR check (simplified; for exact match, use ipaddress module)
+                if ip.startswith(network.split('.')[0]):
+                    return True
+        # Check HTTP headers
+        response = requests.get(f"https://{domain}", timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        headers = response.headers
+        if 'CF-RAY' in headers or 'CF-Cache-Status' in headers:
+            return True
+    except Exception:
+        pass
+    return False
+
 def analyze_records(domain):
     spf_records = fetch_txt_record(domain)
     spf = {"present": False, "policy": "Missing", "reasoning": "SPF missing—exposes you to spoofing. A -all policy blocks unauthorized senders.", "recommendation": "Add v=spf1 -all for top-tier security"}
@@ -107,7 +129,7 @@ def run_wpscan(website):
     if not api_token:
         return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
     try:
-        cmd = ['wpscan', '--url', website, '--format', 'json', '--api-token', api_token, '--no-banner']
+        cmd = ['wpscan', '--url', website, '--format', 'json', '--api-token', api_token, '--no-banner', '--random-user-agent']  # Added random user-agent
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode == 0:
             data = json.loads(result.stdout)
@@ -141,7 +163,7 @@ def analyze_wordpress_vulnerabilities(domain):
             return run_wpscan(website)
     return None  # No WP detected
 
-def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
+def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, cloudflare_detected):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -151,6 +173,12 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(Paragraph(f"Domain: {domain}", styles['Heading2']))
     elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
     elements.append(Spacer(1, 0.2 * inch))
+    
+    # Cloudflare Warning
+    if cloudflare_detected:
+        elements.append(Paragraph("⚠️ Cloudflare Proxy Detected", styles['Heading3']))
+        elements.append(Paragraph("This site uses a Cloudflare proxy, which may affect scan accuracy. Consider scanning the origin IP or contacting the site admin for details.", styles['Normal']))
+        elements.append(Spacer(1, 0.2 * inch))
     
     # DMARC Table
     elements.append(Paragraph("DMARC Analysis", styles['Heading3']))
@@ -241,6 +269,9 @@ if submit_button:
             dmarc, dkim, spf = analyze_records(domain)
             score = compute_score(dmarc, dkim, spf)
             
+            # Check for Cloudflare
+            cloudflare_detected = is_cloudflare_proxy(domain)
+            
             # WordPress Check and WPScan
             wordpress_analysis = None
             if force_wp or is_wordpress(website):
@@ -264,6 +295,10 @@ if submit_button:
                 spf_status = "✅" if spf["present"] else "❌"
                 st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
                 st.progress(100 if spf["present"] else 0)
+            
+            # Cloudflare Warning
+            if cloudflare_detected:
+                st.warning("⚠️ Cloudflare Proxy Detected: Scan accuracy may be affected. Consider scanning the origin IP or contacting the site admin.")
             
             # Detailed Tables
             st.subheader("📊 Detailed Report")
@@ -299,7 +334,7 @@ if submit_button:
                 st.info("No WordPress detected on root/www/blog subdomains. Check 'Force WPScan' for custom sites or provide the exact URL.")
             
             # PDF Download
-            pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis)
+            pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, cloudflare_detected)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
 st.markdown("---")
