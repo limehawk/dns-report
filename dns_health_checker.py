@@ -2,7 +2,9 @@ import streamlit as st
 import dns.resolver
 import re
 import requests
-from wpvulndb import API
+import json
+import subprocess
+import os
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet
@@ -93,29 +95,44 @@ def compute_score(dmarc, dkim, spf):
 def is_wordpress(website):
     try:
         response = requests.get(website, timeout=10)
-        html = response.text.lower()
+        html = response.html.lower()
         if 'wp-content' in html or 'generator" content="wordpress' in html:
             return True
     except:
         pass
     return False
 
+def run_wpscan(website):
+    api_token = os.getenv('WPSCAN_API_TOKEN')
+    if not api_token:
+        return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
+    try:
+        cmd = ['wpscan', '--url', website, '--format', 'json', '--api-token', api_token, '--no-banner']
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            outdated_plugins = []
+            vulnerabilities = []
+            if 'plugins' in data:
+                for plugin in data['plugins'].values():
+                    if 'outdated' in plugin and plugin['outdated']:
+                        outdated_plugins.append(f"{plugin['slug']} (Version: {plugin.get('version', 'Unknown')})")
+                    if 'vulnerabilities' in plugin and plugin['vulnerabilities']:
+                        for v in plugin['vulnerabilities']:
+                            vulnerabilities.append(f"{plugin['slug']}: {v.get('title', 'Unknown')} (Severity: {v.get('risk_score', 'N/A')})")
+            return {
+                "outdated_plugins": outdated_plugins,
+                "vulnerabilities": vulnerabilities
+            }
+        else:
+            return {"error": result.stderr}
+    except Exception as e:
+        return {"error": str(e)}
+
 def analyze_wordpress_vulnerabilities(website):
     if not is_wordpress(website):
         return None
-    try:
-        api = API()
-        response = requests.get(website, timeout=10)
-        html = response.text.lower()
-        plugins = re.findall(r'wp-content/plugins/([^/"]+)', html)
-        vulnerabilities = {}
-        for plugin in set(plugins):
-            vulns = api.get_vulnerabilities(plugin)
-            if vulns and 'vulnerabilities' in vulns:
-                vulnerabilities[plugin] = [v for v in vulns['vulnerabilities'] if v.get('is_fixed') == 0]
-        return vulnerabilities if vulnerabilities else {"note": "No known vulnerabilities detected or plugins not identifiable."}
-    except Exception as e:
-        return {"error": f"Error analyzing vulnerabilities: {str(e)}"}
+    return run_wpscan(website)
 
 def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     buffer = BytesIO()
@@ -128,7 +145,7 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
     elements.append(Spacer(1, 0.2 * inch))
     
-    # DMARC Table with Reasoning
+    # DMARC Table
     elements.append(Paragraph("DMARC Analysis", styles['Heading3']))
     dmarc_data = [["Status", "Present" if dmarc["present"] else "Missing"], 
                   ["Policy", dmarc["policy"]], 
@@ -141,7 +158,7 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # DKIM Table with Reasoning
+    # DKIM Table
     elements.append(Paragraph("DKIM Analysis", styles['Heading3']))
     dkim_data = [["Status", "Present" if dkim["present"] else "Missing"], 
                  ["Records", dkim["count"]], 
@@ -156,7 +173,7 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # SPF Table with Reasoning
+    # SPF Table
     elements.append(Paragraph("SPF Analysis", styles['Heading3']))
     spf_data = [["Status", "Present" if spf["present"] else "Missing"], 
                 ["Policy", spf["policy"]], 
@@ -169,16 +186,15 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # WordPress Vulnerability Analysis
+    # WordPress Analysis
     if wordpress_analysis:
         elements.append(Paragraph("WordPress Vulnerability Analysis", styles['Heading3']))
         if "error" in wordpress_analysis:
             wp_data = [["Status", "Error"], ["Details", wordpress_analysis["error"]]]
-        elif "note" in wordpress_analysis:
-            wp_data = [["Status", "Checked"], ["Details", wordpress_analysis["note"]]]
         else:
-            wp_items = [[f"{plugin} (Vulns: {len(vulns)})", "; ".join(v["title"] for v in vulns)] for plugin, vulns in wordpress_analysis.items()]
-            wp_data = [["Plugin", "Vulnerabilities"]] + wp_items if wp_items else [["Status", "No vulnerabilities detected"]]
+            outdated_str = ", ".join(wordpress_analysis.get("outdated_plugins", [])) or "None"
+            vulns_str = ", ".join(wordpress_analysis.get("vulnerabilities", [])) or "None"
+            wp_data = [["Outdated Plugins", outdated_str], ["Vulnerabilities", vulns_str]]
         t = Table(wp_data)
         t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
                               ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
@@ -204,11 +220,11 @@ if submit_button:
     else:
         domain = email.split('@')[1]
         website = f"https://{domain}"
-        with st.spinner("🔍 Querying DNS records and scanning..."):
+        with st.spinner("🔍 Querying DNS records and scanning website..."):
             dmarc, dkim, spf = analyze_records(domain)
             score = compute_score(dmarc, dkim, spf)
             
-            # WordPress Check and Vulnerability Analysis
+            # WordPress Check and WPScan
             wordpress_analysis = analyze_wordpress_vulnerabilities(website)
             
             # Overall Score
@@ -247,19 +263,22 @@ if submit_button:
             st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
             st.markdown(spf["recommendation"])
             
+            # WordPress Analysis
             if wordpress_analysis:
                 st.subheader("WordPress Vulnerability Analysis")
                 if "error" in wordpress_analysis:
                     st.error(wordpress_analysis["error"])
-                elif "note" in wordpress_analysis:
-                    st.info(wordpress_analysis["note"])
                 else:
-                    for plugin, vulns in wordpress_analysis.items():
-                        st.warning(f"{plugin} has {len(vulns)} unfixed vulnerabilities: {', '.join(v['title'] for v in vulns)}")
+                    outdated = wordpress_analysis.get("outdated_plugins", [])
+                    vulns = wordpress_analysis.get("vulnerabilities", [])
+                    st.info(f"Outdated Plugins: {', '.join(outdated) or 'None'}")
+                    st.warning(f"Vulnerabilities Found: {', '.join(vulns) or 'None'}")
+                    if outdated or vulns:
+                        st.markdown("**Recommendation**: Schedule a full audit with LimeHawk MSP to patch these!")
             
             # PDF Download
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
 st.markdown("---")
-st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries")
+st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries & WPScan")
