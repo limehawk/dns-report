@@ -12,39 +12,62 @@ import smtplib
 import ssl
 import threading
 from concurrent.futures import ThreadPoolExecutor
-import time
 
 MSP_NAME = "LimeHawk MSP"
 MSP_CONTACT = "Contact: sales@limehawk.com | 1-800-MSP-HELP"
 
-def fetch_txt_record(domain, subdomain=""):
+def fetch_txt_record(domain, subdomain="", status_placeholder=None):
+    if status_placeholder:
+        status_placeholder.text(f"🔍 {domain}: Fetching {subdomain or 'TXT'} records...")
     try:
         full_domain = f"{subdomain}.{domain}" if subdomain else domain
         answers = dns.resolver.resolve(full_domain, 'TXT')
+        if status_placeholder:
+            status_placeholder.text(f"✅ {domain}: Fetched {subdomain or 'TXT'} records")
         return [str(rdata).strip('"') for rdata in answers]
     except dns.resolver.NXDOMAIN:
+        if status_placeholder:
+            status_placeholder.text(f"⚠️ {domain}: No {subdomain or 'TXT'} records found")
         return []
     except dns.resolver.NoAnswer:
+        if status_placeholder:
+            status_placeholder.text(f"⚠️ {domain}: No {subdomain or 'TXT'} records found")
         return []
     except dns.resolver.Timeout:
+        if status_placeholder:
+            status_placeholder.text(f"⏳ {domain}: Timeout querying {subdomain or 'TXT'} records")
         st.error(f"⏳ Timeout querying {full_domain}")
         return []
     except Exception as e:
+        if status_placeholder:
+            status_placeholder.text(f"❌ {domain}: Error querying {subdomain or 'TXT'} records: {e}")
         st.error(f"❌ DNS Error: {e}")
         return []
 
-def fetch_mx_records(domain):
+def fetch_mx_records(domain, status_placeholder=None):
+    if status_placeholder:
+        status_placeholder.text(f"🔍 {domain}: Fetching MX records...")
     try:
         answers = dns.resolver.resolve(domain, 'MX')
+        if status_placeholder:
+            status_placeholder.text(f"✅ {domain}: Fetched MX records")
         return [(int(rdata.preference), str(rdata.exchange).rstrip('.')) for rdata in answers]
     except dns.resolver.NXDOMAIN:
+        if status_placeholder:
+            status_placeholder.text(f"⚠️ {domain}: No MX records found")
         return []
     except dns.resolver.NoAnswer:
+        if status_placeholder:
+            status_placeholder.text(f"⚠️ {domain}: No MX records found")
         return []
     except dns.resolver.Timeout:
+        if status_placeholder:
+            status_placeholder.text(f"⏳ {domain}: Timeout querying MX records")
         st.error(f"⏳ Timeout querying MX for {domain}")
         return []
     except Exception as e:
+        if status_placeholder:
+            status_placeholder.text(f"❌ {domain}: Error querying MX records: {e}")
         st.error(f"❌ MX Error: {e}")
         return []
 
@@ -61,8 +84,12 @@ def check_tls(mx_host, port=25):
     except Exception:
         return None
 
-def analyze_records(domain):
-    spf_records = fetch_txt_record(domain)
+def analyze_records(domain, status_placeholders):
+    status_placeholder = status_placeholders.get(domain, st.empty())
+    
+    status_placeholder.text(f"🔍 {domain}: Starting analysis...")
+    spf_records = fetch_txt_record(domain, "", status_placeholder)
+    status_placeholder.text(f"🔍 {domain}: Analyzing SPF...")
     spf = {"present": False, "policy": "Missing", "reasoning": "SPF missing—exposes you to spoofing. A -all policy blocks unauthorized senders.", "recommendation": "Add v=spf1 -all for top-tier security"}
     for txt in spf_records:
         if txt.lower().startswith("v=spf1"):
@@ -76,7 +103,8 @@ def analyze_records(domain):
                 spf["reasoning"] = "~all soft-fails but allows some spoofing. Upgrade for full protection."
                 spf["recommendation"] = "Switch to -all to lock it down."
     
-    dmarc_records = fetch_txt_record(domain, "_dmarc")
+    status_placeholder.text(f"🔍 {domain}: Analyzing DMARC...")
+    dmarc_records = fetch_txt_record(domain, "_dmarc", status_placeholder)
     dmarc = {"present": False, "policy": "Missing", "reasoning": "No DMARC means no email authentication—clients could be spoofed easily.", "recommendation": "Add v=DMARC1; p=reject for robust defense"}
     for txt in dmarc_records:
         if "v=dmarc1" in txt.lower():
@@ -87,12 +115,13 @@ def analyze_records(domain):
             dmarc["reasoning"] = f"{dmarc['policy']} policy detected—{('great for blocking fakes' if dmarc['policy'] == 'reject' else 'vulnerable to spoofing, upgrade needed')}."
             dmarc["recommendation"] = "Monitor reports" if dmarc["policy"] == "reject" else "Upgrade to reject for max security."
     
+    status_placeholder.text(f"🔍 {domain}: Analyzing DKIM...")
     common_selectors = ["google", "default", "selector1", "selector2"]
     dkim_count = 0
     dkim_selectors = []
     dkim_present = False
     for selector in common_selectors:
-        dkim_records = fetch_txt_record(domain, f"{selector}._domainkey")
+        dkim_records = fetch_txt_record(domain, f"{selector}._domainkey", status_placeholder)
         for txt in dkim_records:
             if "v=dkim1" in txt.lower():
                 dkim_count += 1
@@ -102,9 +131,11 @@ def analyze_records(domain):
             "reasoning": "DKIM present with valid records, enhancing email trust." if dkim_present else "DKIM missing—emails lack sender verification, hurting trust.",
             "recommendation": "Maintain and rotate keys annually" if dkim_present else "Add selectors for verified sending"}
     
-    mx_records = fetch_mx_records(domain)
+    status_placeholder.text(f"🔍 {domain}: Fetching MX records...")
+    mx_records = fetch_mx_records(domain, status_placeholder)
     mx_tls = {}
     if mx_records:
+        status_placeholder.text(f"🔍 {domain}: Checking TLS support...")
         with ThreadPoolExecutor(max_workers=min(len(mx_records), 4)) as executor:
             future_to_host = {executor.submit(check_tls, host): host for _, host in mx_records}
             for future in future_to_host:
@@ -117,7 +148,8 @@ def analyze_records(domain):
                            "Add a secondary MX with higher priority (e.g., 20)." if len(mx_records) == 1 else
                            "Verify TLS support on all MX targets (see report)."}
     
-    bimi_records = fetch_txt_record(domain, "_bimi")
+    status_placeholder.text(f"🔍 {domain}: Analyzing BIMI...")
+    bimi_records = fetch_txt_record(domain, "_bimi", status_placeholder)
     bimi = {"present": False, "record": None, "reasoning": "BIMI missing—missed chance to brand emails.", "recommendation": "Add v=bimi1 record for email branding."}
     for txt in bimi_records:
         if txt.lower().startswith("v=bimi1"):
@@ -126,7 +158,8 @@ def analyze_records(domain):
             bimi["reasoning"] = "BIMI present—emails can display your logo."
             bimi["recommendation"] = "Ensure logo is uploaded and policy complies."
     
-    mta_sts_records = fetch_txt_record(domain, "_mta-sts")
+    status_placeholder.text(f"🔍 {domain}: Analyzing MTA-STS...")
+    mta_sts_records = fetch_txt_record(domain, "_mta-sts", status_placeholder)
     mta_sts = {"present": False, "record": None, "reasoning": "MTA-STS missing—email lacks TLS enforcement.", "recommendation": "Add v=sts1 record for TLS security."}
     for txt in mta_sts_records:
         if txt.lower().startswith("v=sts1"):
@@ -135,6 +168,7 @@ def analyze_records(domain):
             mta_sts["reasoning"] = "MTA-STS present—TLS enforcement active."
             mta_sts["recommendation"] = "Monitor and maintain STS policy."
     
+    status_placeholder.text(f"✅ {domain}: Analysis complete")
     return dmarc, dkim, spf, mx, bimi, mta_sts
 
 def compute_score(dmarc, dkim, spf, mx, bimi, mta_sts):
@@ -282,24 +316,22 @@ if submit_button:
         st.error("Enter at least one domain!")
     else:
         all_results = {}
-        progress_bar = st.empty()
-        progress = 0
-        with st.spinner("🔍 Querying DNS records for all domains..."):
-            while progress < 100:
-                progress_bar.progress(progress)
-                time.sleep(0.1)  # Simulate work with a short delay
-                progress += 5
+        status_placeholders = {domain: st.empty() for domain in domains}
+        with st.spinner("🔍 Processing all domains..."):
             for domain in domains:
                 domain = urlparse(domain).netloc if '://' in domain else domain.strip('/')
                 domain = domain.lstrip('www.')
                 if not domain:
-                    st.error(f"Invalid domain format for '{domain_input}'. Skipping.")
+                    status_placeholders[domain].text(f"❌ {domain}: Invalid domain format. Skipping.")
                     continue
-                dmarc, dkim, spf, mx, bimi, mta_sts = analyze_records(domain)
+                dmarc, dkim, spf, mx, bimi, mta_sts = analyze_records(domain, status_placeholders)
                 score = compute_score(dmarc, dkim, spf, mx, bimi, mta_sts)
                 all_results[domain] = {"dmarc": dmarc, "dkim": dkim, "spf": spf, "mx": mx, "bimi": bimi, "mta_sts": mta_sts, "score": score}
         
-        progress_bar.empty()  # Clear the progress bar after completion
+        # Clear status placeholders after completion
+        for placeholder in status_placeholders.values():
+            placeholder.empty()
+        
         for domain, results in all_results.items():
             st.subheader(f"Results for {domain}")
             dmarc, dkim, spf, mx, bimi, mta_sts, score = results.values()
