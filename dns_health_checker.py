@@ -18,7 +18,6 @@ if not API_KEY:
 MSP_NAME = "LimeHawk MSP"
 MSP_CONTACT = "Contact: sales@limehawk.com | 1-800-MSP-HELP"
 
-# ==================== FUNCTION 1: FETCH DNS ====================
 def fetch_dns_data(domain):
     url = f"https://api.dnsdumpster.com/domain/{domain}"
     headers = {"X-API-Key": API_KEY}
@@ -31,7 +30,6 @@ def fetch_dns_data(domain):
         st.error(f"❌ API Error: {response.status_code}")
     return None
 
-# ==================== FUNCTION 2: ANALYZE TXT ====================
 def analyze_txt_records(txt_records):
     dmarc = {"present": False, "policy": "Missing", "recommendation": "Set p=reject"}
     dkim = {"present": False, "count": 0, "recommendation": "Configure selectors"}
@@ -60,7 +58,6 @@ def analyze_txt_records(txt_records):
     
     return dmarc, dkim, spf
 
-# ==================== FUNCTION 3: GENERATE PDF ====================
 def generate_pdf_report(domain, dmarc, dkim, spf):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -109,7 +106,6 @@ def generate_pdf_report(domain, dmarc, dkim, spf):
     buffer.seek(0)
     return buffer
 
-# ==================== STREAMLIT UI ====================
 st.title(f"🔒 {MSP_NAME} DNS Checker")
 st.markdown("**Sales Tool**: Enter domain → Get PDF → Pitch security services!")
 
@@ -125,25 +121,11 @@ if st.button("🚀 Generate Report", type="primary"):
                 txt_records = data.get("txt", [])
                 dmarc, dkim, spf = analyze_txt_records(txt_records)
                 
-                # Quick Status Cards
                 col1, col2, col3 = st.columns(3)
                 with col1: st.metric("DMARC", "✅" if dmarc["present"] else "❌", dmarc["policy"])
                 with col2: st.metric("DKIM", "✅" if dkim["present"] else "❌", dkim["count"])
                 with col3: st.metric("SPF", "✅" if spf["present"] else "❌", spf["policy"])
                 
-                # Detailed Tables
-                st.subheader("📊 Detailed Report")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**DMARC**")
-                    st.table({k: [v] for k, v in dmarc.items()})
-                with col2:
-                    st.markdown("**DKIM**")
-                    st.table({k: [v] for k, v in dkim.items()})
-                st.markdown("**SPF**")
-                st.table({k: [v] for k, v in spf.items()})
-                
-                # PDF Download
                 pdf = generate_pdf_report(domain, dmarc, dkim, spf)
                 st.download_button(
                     "💾 Download Sales PDF", 
