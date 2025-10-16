@@ -33,18 +33,12 @@ def fetch_txt_record(domain, subdomain=""):
 
 def is_cloudflare_proxy(domain):
     try:
-        # Resolve A record
         answers = dns.resolver.resolve(domain, 'A')
         ip = answers[0].to_text()
-        # Check against known Cloudflare IP ranges (simplified)
         cloudflare_ranges = ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22']
         for range in cloudflare_ranges:
-            if '/' in range:
-                network, mask = range.split('/')
-                # Basic CIDR check (simplified; for exact match, use ipaddress module)
-                if ip.startswith(network.split('.')[0]):
-                    return True
-        # Check HTTP headers
+            if ip.startswith(range.split('.')[0]):
+                return True
         response = requests.get(f"https://{domain}", timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         headers = response.headers
         if 'CF-RAY' in headers or 'CF-Cache-Status' in headers:
@@ -129,8 +123,8 @@ def run_wpscan(website):
     if not api_token:
         return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
     try:
-        cmd = ['wpscan', '--url', website, '--format', 'json', '--api-token', api_token, '--no-banner', '--random-user-agent']  # Added random user-agent
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        cmd = ['wpscan', '--url', website, '--format', 'json', '--api-token', api_token, '--no-banner', '--random-user-agent', '--stealthy']
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)  # Increased timeout for stealth
         if result.returncode == 0:
             data = json.loads(result.stdout)
             outdated_plugins = []
@@ -151,17 +145,17 @@ def run_wpscan(website):
     except Exception as e:
         return {"error": str(e)}
 
-def analyze_wordpress_vulnerabilities(domain):
+def analyze_wordpress_vulnerabilities(domain, force=False):
     api_token = os.getenv('WPSCAN_API_TOKEN')
     if not api_token:
         return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
     
-    subdomains = ['', 'www', 'blog']  # Check root, www, blog
+    subdomains = ['', 'www', 'blog']
     for sub in subdomains:
         website = f"https://{sub}.{domain}" if sub else f"https://{domain}"
-        if is_wordpress(website):
+        if force or is_wordpress(website):
             return run_wpscan(website)
-    return None  # No WP detected
+    return None  # No WP detected unless forced
 
 def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, cloudflare_detected):
     buffer = BytesIO()
@@ -174,13 +168,11 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
     elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
     elements.append(Spacer(1, 0.2 * inch))
     
-    # Cloudflare Warning
     if cloudflare_detected:
         elements.append(Paragraph("⚠️ Cloudflare Proxy Detected", styles['Heading3']))
-        elements.append(Paragraph("This site uses a Cloudflare proxy, which may affect scan accuracy. Consider scanning the origin IP or contacting the site admin for details.", styles['Normal']))
+        elements.append(Paragraph("This site uses a Cloudflare proxy, which may affect scan accuracy. Consider scanning the origin IP or contacting the site admin.", styles['Normal']))
         elements.append(Spacer(1, 0.2 * inch))
     
-    # DMARC Table
     elements.append(Paragraph("DMARC Analysis", styles['Heading3']))
     dmarc_data = [["Status", "Present" if dmarc["present"] else "Missing"], 
                   ["Policy", dmarc["policy"]], 
@@ -193,7 +185,6 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # DKIM Table
     elements.append(Paragraph("DKIM Analysis", styles['Heading3']))
     dkim_data = [["Status", "Present" if dkim["present"] else "Missing"], 
                  ["Records", dkim["count"]], 
@@ -208,7 +199,6 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # SPF Table
     elements.append(Paragraph("SPF Analysis", styles['Heading3']))
     spf_data = [["Status", "Present" if spf["present"] else "Missing"], 
                 ["Policy", spf["policy"]], 
@@ -221,11 +211,10 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, clo
     elements.append(t)
     elements.append(Spacer(1, 0.2 * inch))
     
-    # WordPress Analysis
     if wordpress_analysis:
         elements.append(Paragraph("WordPress Vulnerability Analysis", styles['Heading3']))
         if "error" in wordpress_analysis:
-            wp_data = [["Status", "Error"], ["Details", wordpress_analysis["error"]]]
+            wp_data = [["Status", "Error"], ["Details", "WPScan encountered an issue. Contact LimeHawk MSP for a manual audit."]]
         else:
             outdated_str = ", ".join(wp_analysis.get("outdated_plugins", [])) or "None"
             vulns_str = ", ".join(wp_analysis.get("vulnerabilities", [])) or "None"
@@ -269,19 +258,13 @@ if submit_button:
             dmarc, dkim, spf = analyze_records(domain)
             score = compute_score(dmarc, dkim, spf)
             
-            # Check for Cloudflare
             cloudflare_detected = is_cloudflare_proxy(domain)
             
-            # WordPress Check and WPScan
-            wordpress_analysis = None
-            if force_wp or is_wordpress(website):
-                wordpress_analysis = analyze_wordpress_vulnerabilities(domain)
+            wordpress_analysis = analyze_wordpress_vulnerabilities(domain, force=force_wp)
             
-            # Overall Score
             st.metric("Overall DNS Security Score", f"{score}%")
             st.progress(score / 100)
             
-            # Visual Enhancements
             col1, col2, col3 = st.columns(3)
             with col1:
                 dmarc_status = "✅" if dmarc["present"] else "❌"
@@ -296,11 +279,9 @@ if submit_button:
                 st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
                 st.progress(100 if spf["present"] else 0)
             
-            # Cloudflare Warning
             if cloudflare_detected:
                 st.warning("⚠️ Cloudflare Proxy Detected: Scan accuracy may be affected. Consider scanning the origin IP or contacting the site admin.")
             
-            # Detailed Tables
             st.subheader("📊 Detailed Report")
             col1, col2 = st.columns(2)
             with col1:
@@ -317,7 +298,6 @@ if submit_button:
             st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
             st.markdown(spf["recommendation"])
             
-            # WordPress Analysis
             if wordpress_analysis:
                 st.subheader("WordPress Vulnerability Analysis")
                 if "error" in wordpress_analysis:
@@ -333,7 +313,6 @@ if submit_button:
                 st.subheader("WordPress Analysis")
                 st.info("No WordPress detected on root/www/blog subdomains. Check 'Force WPScan' for custom sites or provide the exact URL.")
             
-            # PDF Download
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis, cloudflare_detected)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
