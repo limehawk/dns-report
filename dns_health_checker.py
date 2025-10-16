@@ -12,6 +12,7 @@ import smtplib
 import ssl
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 MSP_NAME = "LimeHawk MSP"
 MSP_CONTACT = "Contact: sales@limehawk.com | 1-800-MSP-HELP"
@@ -50,7 +51,7 @@ def fetch_mx_records(domain):
 def check_tls(mx_host, port=25):
     try:
         context = ssl.create_default_context()
-        with smtplib.SMTP(mx_host, port, timeout=10) as server:  # Reduced to 10s
+        with smtplib.SMTP(mx_host, port, timeout=10) as server:
             server.ehlo()
             server.starttls(context=context)
             server.ehlo()
@@ -107,7 +108,7 @@ def analyze_records(domain):
         with ThreadPoolExecutor(max_workers=min(len(mx_records), 4)) as executor:
             future_to_host = {executor.submit(check_tls, host): host for _, host in mx_records}
             for future in future_to_host:
-                mx_tls[future_to_host[future]] = future.result(timeout=15)  # Overall timeout per check
+                mx_tls[future_to_host[future]] = future.result(timeout=15)
     mx = {"present": bool(mx_records), "records": mx_records, "tls": mx_tls,
           "reasoning": "No MX records—email delivery will fail." if not mx_records else 
                        "Single MX record detected—consider adding a backup for redundancy." if len(mx_records) == 1 else
@@ -173,6 +174,13 @@ def generate_pdf_report(domain, dmarc, dkim, spf, mx, bimi, mta_sts, score):
     elements.append(Paragraph(f"{MSP_NAME} DNS Report", styles['Title']))
     elements.append(Paragraph(f"Domain: {domain}", styles['Heading2']))
     elements.append(Paragraph(f"Overall Security Score: {score}%", styles['Heading3']))
+    
+    # Executive Summary
+    summary = f"""
+    **Executive Summary**: 
+    This report assesses the DNS security of {domain}. With an overall score of {score}%, the domain excels in DMARC ({dmarc['policy']} policy), DKIM (1 record), and MX redundancy. However, SPF uses a ~all policy, leaving minor spoofing risks, and BIMI/MTA-STS are absent, missing branding and TLS enforcement opportunities. Contact {MSP_CONTACT} to enhance your security posture.
+    """
+    elements.append(Paragraph(summary, styles['Normal']))
     elements.append(Spacer(1, 0.2 * inch))
     
     # DMARC Table
@@ -274,7 +282,13 @@ if submit_button:
         st.error("Enter at least one domain!")
     else:
         all_results = {}
+        progress_bar = st.empty()
+        progress = 0
         with st.spinner("🔍 Querying DNS records for all domains..."):
+            while progress < 100:
+                progress_bar.progress(progress)
+                time.sleep(0.1)  # Simulate work with a short delay
+                progress += 5
             for domain in domains:
                 domain = urlparse(domain).netloc if '://' in domain else domain.strip('/')
                 domain = domain.lstrip('www.')
@@ -285,6 +299,7 @@ if submit_button:
                 score = compute_score(dmarc, dkim, spf, mx, bimi, mta_sts)
                 all_results[domain] = {"dmarc": dmarc, "dkim": dkim, "spf": spf, "mx": mx, "bimi": bimi, "mta_sts": mta_sts, "score": score}
         
+        progress_bar.empty()  # Clear the progress bar after completion
         for domain, results in all_results.items():
             st.subheader(f"Results for {domain}")
             dmarc, dkim, spf, mx, bimi, mta_sts, score = results.values()
