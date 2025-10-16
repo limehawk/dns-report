@@ -137,19 +137,19 @@ if st.button("🚀 Generate Report", type="primary"):
             # Visual Enhancements
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("DMARC", "✅" if dmarc["present"] else "❌", dmarc["policy"], 
-                         delta=dmarc["recommendation"] if not dmarc["present"] else None, 
-                         delta_color="inverse")
+                dmarc_status = "✅" if dmarc["present"] else "❌"
+                dmarc_delta = dmarc["recommendation"] if not dmarc["present"] else None
+                st.metric("DMARC", dmarc_status, dmarc["policy"], delta=dmarc_delta, delta_color="inverse")
                 st.progress(100 if dmarc["present"] else 0)
             with col2:
-                st.metric("DKIM", "✅" if dkim["present"] else "❌", str(dkim["count"]), 
-                         delta=dkim["recommendation"] if not dkim["present"] else None, 
-                         delta_color="inverse")
+                dkim_status = "✅" if dkim["present"] else "❌"
+                dkim_delta = dkim["recommendation"] if not dkim["present"] else None
+                st.metric("DKIM", dkim_status, str(dkim["count"]), delta=dkim_delta, delta_color="inverse")
                 st.progress(100 if dkim["present"] else 0)
             with col3:
-                st.metric("SPF", "✅" if spf["present"] else "❌", spf["policy"], 
-                         delta=spf["recommendation"] if not spf["present"] else None, 
-                         delta_color="inverse")
+                spf_status = "✅" if spf["present"] else "❌"
+                spf_delta = spf["recommendation"] if not spf["present"] else None
+                st.metric("SPF", spf_status, spf["policy"], delta=spf_delta, delta_color="inverse")
                 st.progress(100 if spf["present"] else 0)
             
             # Detailed Tables
