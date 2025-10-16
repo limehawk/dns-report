@@ -307,7 +307,7 @@ st.title(f"🔒 {MSP_NAME} DNS Checker (Direct DNS Queries)")
 st.markdown("**Sales Tool**: Enter domain(s) → Get PDF → Pitch security services! (No API needed)")
 
 with st.form(key="domain_form"):
-    domain_input = st.text_area("Domain(s)", placeholder="example.com\nbluepathservicedogs.org", help="Enter one domain per line")
+    domain_input = st.text_area("Domain(s)", placeholder="example.com\nexample2.org", help="Enter one domain per line")
     submit_button = st.form_submit_button("🚀 Generate Report")
 
 if submit_button:
