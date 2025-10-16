@@ -95,8 +95,8 @@ def compute_score(dmarc, dkim, spf):
 def is_wordpress(website):
     try:
         response = requests.get(website, timeout=10)
-        html = response.html.lower()
-        if 'wp-content' in html or 'generator" content="wordpress' in html:
+        html = response.text.lower()
+        if 'wp-content' in html or 'generator" content="wordpress' in html or 'wp-includes' in html or 'wp-admin' in html:
             return True
     except:
         pass
@@ -114,25 +114,32 @@ def run_wpscan(website):
             outdated_plugins = []
             vulnerabilities = []
             if 'plugins' in data:
-                for plugin in data['plugins'].values():
+                for plugin in data.get('plugins', {}).values():
                     if 'outdated' in plugin and plugin['outdated']:
                         outdated_plugins.append(f"{plugin['slug']} (Version: {plugin.get('version', 'Unknown')})")
                     if 'vulnerabilities' in plugin and plugin['vulnerabilities']:
-                        for v in plugin['vulnerabilities']:
-                            vulnerabilities.append(f"{plugin['slug']}: {v.get('title', 'Unknown')} (Severity: {v.get('risk_score', 'N/A')})")
+                        for vuln in plugin['vulnerabilities']:
+                            vulnerabilities.append(f"{plugin['slug']}: {vuln.get('title', 'Unknown')} (Severity: {vuln.get('risk_score', 'N/A')})")
             return {
                 "outdated_plugins": outdated_plugins,
                 "vulnerabilities": vulnerabilities
             }
         else:
-            return {"error": result.stderr}
+            return {"error": f"WPScan failed: {result.stderr}"}
     except Exception as e:
         return {"error": str(e)}
 
-def analyze_wordpress_vulnerabilities(website):
-    if not is_wordpress(website):
-        return None
-    return run_wpscan(website)
+def analyze_wordpress_vulnerabilities(domain):
+    api_token = os.getenv('WPSCAN_API_TOKEN')
+    if not api_token:
+        return {"error": "WPScan API token not set. Add WPSCAN_API_TOKEN in env vars."}
+    
+    subdomains = ['', 'www', 'blog']  # Check root, www, blog
+    for sub in subdomains:
+        website = f"https://{sub}.{domain}" if sub else f"https://{domain}"
+        if is_wordpress(website):
+            return run_wpscan(website)
+    return None  # No WP detected
 
 def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
     buffer = BytesIO()
@@ -192,9 +199,18 @@ def generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis):
         if "error" in wordpress_analysis:
             wp_data = [["Status", "Error"], ["Details", wordpress_analysis["error"]]]
         else:
-            outdated_str = ", ".join(wordpress_analysis.get("outdated_plugins", [])) or "None"
-            vulns_str = ", ".join(wordpress_analysis.get("vulnerabilities", [])) or "None"
+            outdated_str = ", ".join(wp_analysis.get("outdated_plugins", [])) or "None"
+            vulns_str = ", ".join(wp_analysis.get("vulnerabilities", [])) or "None"
             wp_data = [["Outdated Plugins", outdated_str], ["Vulnerabilities", vulns_str]]
+        t = Table(wp_data)
+        t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+                              ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                              ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+        elements.append(t)
+        elements.append(Spacer(1, 0.2 * inch))
+    else:
+        elements.append(Paragraph("WordPress Analysis", styles['Heading3']))
+        wp_data = [["Status", "Not Detected"], ["Recommendation", "No WP found on root/www/blog subdomains. If WP is on a custom subdomain, provide it for a scan."]]
         t = Table(wp_data)
         t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
                               ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
@@ -212,6 +228,7 @@ st.markdown("**Sales Tool**: Enter email → Get PDF → Pitch security services
 
 with st.form(key="email_form"):
     email = st.text_input("Email Address", placeholder="user@domain.com")
+    force_wp = st.checkbox("Force WPScan (if custom subdomain or known WP)")
     submit_button = st.form_submit_button("🚀 Generate Report")
 
 if submit_button:
@@ -225,7 +242,9 @@ if submit_button:
             score = compute_score(dmarc, dkim, spf)
             
             # WordPress Check and WPScan
-            wordpress_analysis = analyze_wordpress_vulnerabilities(website)
+            wordpress_analysis = None
+            if force_wp or is_wordpress(website):
+                wordpress_analysis = analyze_wordpress_vulnerabilities(domain)
             
             # Overall Score
             st.metric("Overall DNS Security Score", f"{score}%")
@@ -239,7 +258,7 @@ if submit_button:
                 st.progress(100 if dmarc["present"] else 0)
             with col2:
                 dkim_status = "✅" if dkim["present"] else "❌"
-                st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
+                st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
                 st.progress(100 if dkim["present"] else 0)
             with col3:
                 spf_status = "✅" if spf["present"] else "❌"
@@ -275,6 +294,9 @@ if submit_button:
                     st.warning(f"Vulnerabilities Found: {', '.join(vulns) or 'None'}")
                     if outdated or vulns:
                         st.markdown("**Recommendation**: Schedule a full audit with LimeHawk MSP to patch these!")
+            else:
+                st.subheader("WordPress Analysis")
+                st.info("No WordPress detected on root/www/blog subdomains. Check 'Force WPScan' for custom sites or provide the exact URL.")
             
             # PDF Download
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis)
