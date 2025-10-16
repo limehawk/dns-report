@@ -1,13 +1,9 @@
 FROM python:3.11-slim
 
-# Install Ruby and WPScan dependencies
-RUN apt-get update && apt-get install -y ruby-full build-essential zlib1g-dev libcurl4-openssl-dev && \
-    gem install wpscan
-
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
