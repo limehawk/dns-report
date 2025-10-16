@@ -138,22 +138,15 @@ if st.button("🚀 Generate Report", type="primary"):
             col1, col2, col3 = st.columns(3)
             with col1:
                 dmarc_status = "✅" if dmarc["present"] else "❌"
-                dmarc_delta = dmarc["recommendation"] if not dmarc["present"] else None
-# Visual Enhancements
-col1, col2, col3 = st.columns(3)
-with col1:
-    dmarc_status = "✅" if dmarc["present"] else "❌"
-    st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
-    st.progress(100 if dmarc["present"] else 0)
-with col2:
-    dkim_status = "✅" if dkim["present"] else "❌"
-    st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
-    st.progress(100 if dkim["present"] else 0)
-with col3:
-    spf_status = "✅" if spf["present"] else "❌"
-    st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
-    st.progress(100 if spf["present"] else 0)                spf_delta = spf["recommendation"] if not spf["present"] else None
-                st.metric("SPF", spf_status, spf["policy"], delta=spf_delta, delta_color="inverse")
+                st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
+                st.progress(100 if dmarc["present"] else 0)
+            with col2:
+                dkim_status = "✅" if dkim["present"] else "❌"
+                st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
+                st.progress(100 if dkim["present"] else 0)
+            with col3:
+                spf_status = "✅" if spf["present"] else "❌"
+                st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
                 st.progress(100 if spf["present"] else 0)
             
             # Detailed Tables
