@@ -8,6 +8,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib import colors
 from io import BytesIO
 from urllib.parse import urlparse
+import smtplib
+import ssl
 
 MSP_NAME = "LimeHawk MSP"
 MSP_CONTACT = "Contact: sales@limehawk.com | 1-800-MSP-HELP"
@@ -42,6 +44,17 @@ def fetch_mx_records(domain):
     except Exception as e:
         st.error(f"❌ MX Error: {e}")
         return []
+
+def check_tls(mx_host, port=25):
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP(mx_host, port, timeout=10) as server:
+            server.starttls(context=context)
+        return True
+    except (smtplib.SMTPNotSupportedError, ssl.SSLError, smtplib.SMTPServerDisconnected):
+        return False
+    except Exception:
+        return None  # Timeout or other failure
 
 def analyze_records(domain):
     spf_records = fetch_txt_record(domain)
@@ -85,17 +98,39 @@ def analyze_records(domain):
             "recommendation": "Maintain and rotate keys annually" if dkim_present else "Add selectors for verified sending"}
     
     mx_records = fetch_mx_records(domain)
-    mx = {"present": bool(mx_records), "records": mx_records,
+    mx_tls = {}
+    for priority, host in mx_records:
+        tls_result = check_tls(host)
+        mx_tls[host] = tls_result
+    mx = {"present": bool(mx_records), "records": mx_records, "tls": mx_tls,
           "reasoning": "No MX records—email delivery will fail." if not mx_records else 
                        "Single MX record detected—consider adding a backup for redundancy." if len(mx_records) == 1 else
                        "Multiple MX records with priorities—good redundancy, but check target security.",
           "recommendation": "Add MX records to enable email." if not mx_records else
                            "Add a secondary MX with higher priority (e.g., 20)." if len(mx_records) == 1 else
-                           "Verify MX targets support TLS (e.g., test with our tools)."}
+                           "Verify TLS support on all MX targets (see report)."}
     
-    return dmarc, dkim, spf, mx
+    bimi_records = fetch_txt_record(domain, "_bimi")
+    bimi = {"present": False, "record": None, "reasoning": "BIMI missing—missed chance to brand emails.", "recommendation": "Add v=bimi1 record for email branding."}
+    for txt in bimi_records:
+        if txt.lower().startswith("v=bimi1"):
+            bimi["present"] = True
+            bimi["record"] = txt
+            bimi["reasoning"] = "BIMI present—emails can display your logo."
+            bimi["recommendation"] = "Ensure logo is uploaded and policy complies."
+    
+    mta_sts_records = fetch_txt_record(domain, "_mta-sts")
+    mta_sts = {"present": False, "record": None, "reasoning": "MTA-STS missing—email lacks TLS enforcement.", "recommendation": "Add v=sts1 record for TLS security."}
+    for txt in mta_sts_records:
+        if txt.lower().startswith("v=sts1"):
+            mta_sts["present"] = True
+            mta_sts["record"] = txt
+            mta_sts["reasoning"] = "MTA-STS present—TLS enforcement active."
+            mta_sts["recommendation"] = "Monitor and maintain STS policy."
+    
+    return dmarc, dkim, spf, mx, bimi, mta_sts
 
-def compute_score(dmarc, dkim, spf, mx):
+def compute_score(dmarc, dkim, spf, mx, bimi, mta_sts):
     score = 0
     if dmarc["present"]:
         if dmarc["policy"] == "reject":
@@ -115,9 +150,15 @@ def compute_score(dmarc, dkim, spf, mx):
         score += 10  # Basic presence
         if len(mx["records"]) > 1:  # Bonus for redundancy
             score += 10
+        if all(mx["tls"].get(host, False) for host in mx["tls"]):  # Bonus for TLS
+            score += 10
+    if bimi["present"]:
+        score += 5
+    if mta_sts["present"]:
+        score += 5
     return min(score, 100)
 
-def generate_pdf_report(domain, dmarc, dkim, spf, mx, score):
+def generate_pdf_report(domain, dmarc, dkim, spf, mx, bimi, mta_sts, score):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -173,9 +214,36 @@ def generate_pdf_report(domain, dmarc, dkim, spf, mx, score):
     elements.append(Paragraph("MX Analysis", styles['Heading3']))
     mx_data = [["Status", "✅" if mx["present"] else "❌"], 
                ["Records", "\n".join([f"Priority {p}: {t}" for p, t in mx["records"]]) if mx["present"] else "None"], 
+               ["TLS Support", "\n".join([f"{h}: {'✅' if tls else '❌' if tls is not None else 'N/A'}" for h, tls in mx["tls"].items()]) if mx["present"] else "N/A"],
                ["Reasoning", mx["reasoning"]], 
                ["Action", mx["recommendation"]]]
     t = Table(mx_data)
+    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+                          ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                          ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+    elements.append(t)
+    elements.append(Spacer(1, 0.2 * inch))
+    
+    # BIMI Table
+    elements.append(Paragraph("BIMI Analysis", styles['Heading3']))
+    bimi_data = [["Status", "✅" if bimi["present"] else "❌"], 
+                 ["Record", bimi["record"] or "None"], 
+                 ["Reasoning", bimi["reasoning"]], 
+                 ["Action", bimi["recommendation"]]]
+    t = Table(bimi_data)
+    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
+                          ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                          ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+    elements.append(t)
+    elements.append(Spacer(1, 0.2 * inch))
+    
+    # MTA-STS Table
+    elements.append(Paragraph("MTA-STS Analysis", styles['Heading3']))
+    mta_sts_data = [["Status", "✅" if mta_sts["present"] else "❌"], 
+                    ["Record", mta_sts["record"] or "None"], 
+                    ["Reasoning", mta_sts["reasoning"]], 
+                    ["Action", mta_sts["recommendation"]]]
+    t = Table(mta_sts_data)
     t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.grey), 
                           ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                           ('GRID', (0,0), (-1,-1), 1, colors.black)]))
@@ -188,74 +256,97 @@ def generate_pdf_report(domain, dmarc, dkim, spf, mx, score):
     return buffer
 
 st.title(f"🔒 {MSP_NAME} DNS Checker (Direct DNS Queries)")
-st.markdown("**Sales Tool**: Enter domain → Get PDF → Pitch security services! (No API needed)")
+st.markdown("**Sales Tool**: Enter domain(s) → Get PDF → Pitch security services! (No API needed)")
 
 with st.form(key="domain_form"):
-    domain_input = st.text_input("Domain", placeholder="example.com")
+    domain_input = st.text_area("Domain(s)", placeholder="example.com\nbluepathservicedogs.org", help="Enter one domain per line")
     submit_button = st.form_submit_button("🚀 Generate Report")
 
 if submit_button:
-    if not domain_input:
-        st.error("Enter a domain!")
+    domains = [d.strip() for d in domain_input.split('\n') if d.strip()]
+    if not domains:
+        st.error("Enter at least one domain!")
     else:
-        # Sanitize domain input
-        domain = urlparse(domain_input).netloc if '://' in domain_input else domain_input.strip('/')
-        domain = domain.lstrip('www.')  # Optional: strip www. for cleaner DNS lookups
-        if not domain:
-            st.error("Invalid domain format. Please enter a valid domain (e.g., example.com).")
-        else:
-            with st.spinner("🔍 Querying DNS records..."):
-                dmarc, dkim, spf, mx = analyze_records(domain)
-                score = compute_score(dmarc, dkim, spf, mx)
-                
-                # Overall Score
-                st.metric("Overall DNS Security Score", f"{score}%")
-                st.progress(score / 100)
-                
-                # Visual Enhancements
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    dmarc_status = "✅" if dmarc["present"] else "❌"
-                    st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
-                    st.progress(100 if dmarc["present"] else 0)
-                with col2:
-                    dkim_status = "✅" if dkim["present"] else "❌"
-                    st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
-                    st.progress(100 if dkim["present"] else 0)
-                with col3:
-                    spf_status = "✅" if spf["present"] else "❌"
-                    st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
-                    st.progress(100 if spf["present"] else 0)
-                with col4:
-                    mx_status = "✅" if mx["present"] else "❌"
-                    st.metric(label="MX", value=mx_status, delta=mx["recommendation"] if not mx["present"] else None, delta_color="inverse")
-                    st.progress(100 if mx["present"] else 0)
-                
-                # Detailed Tables
-                st.subheader("📊 Detailed Report")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**DMARC**")
-                    st.table({k: [v] for k, v in dmarc.items() if k != "recommendation"})
-                    st.markdown(dmarc["recommendation"])
-                with col2:
-                    st.markdown("**DKIM**")
-                    st.table({k: [v] for k, v in dkim.items() if k not in ["selectors", "recommendation"]})
-                    st.markdown(dkim["recommendation"])
-                    if dkim["selectors"]:
-                        st.write("Selectors:", dkim["selectors"])
-                st.markdown("**SPF**")
-                st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
-                st.markdown(spf["recommendation"])
-                st.markdown("**MX**")
-                st.table({k: [v] for k, v in mx.items() if k not in ["records"]})
-                if mx["records"]:
-                    st.write("Records:", "\n".join([f"Priority {p}: {t}" for p, t in mx["records"]]))
-                st.markdown(mx["recommendation"])
-                
-                # PDF Download
-                pdf = generate_pdf_report(domain, dmarc, dkim, spf, mx, score)
-                st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
+        all_results = {}
+        for domain in domains:
+            # Sanitize domain input
+            domain = urlparse(domain).netloc if '://' in domain else domain.strip('/')
+            domain = domain.lstrip('www.')  # Optional: strip www. for cleaner DNS lookups
+            if not domain:
+                st.error(f"Invalid domain format for '{domain_input}'. Skipping.")
+                continue
+            
+            with st.spinner(f"🔍 Querying DNS records for {domain}..."):
+                dmarc, dkim, spf, mx, bimi, mta_sts = analyze_records(domain)
+                score = compute_score(dmarc, dkim, spf, mx, bimi, mta_sts)
+                all_results[domain] = {"dmarc": dmarc, "dkim": dkim, "spf": spf, "mx": mx, "bimi": bimi, "mta_sts": mta_sts, "score": score}
+        
+        for domain, results in all_results.items():
+            st.subheader(f"Results for {domain}")
+            dmarc, dkim, spf, mx, bimi, mta_sts, score = results.values()
+            
+            # Overall Score
+            st.metric("Overall DNS Security Score", f"{score}%")
+            st.progress(score / 100)
+            
+            # Visual Enhancements
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            with col1:
+                dmarc_status = "✅" if dmarc["present"] else "❌"
+                st.metric(label="DMARC", value=dmarc_status, delta=dmarc["recommendation"] if not dmarc["present"] else None, delta_color="inverse")
+                st.progress(100 if dmarc["present"] else 0)
+            with col2:
+                dkim_status = "✅" if dkim["present"] else "❌"
+                st.metric(label="DKIM", value=dkim_status, delta=dkim["recommendation"] if not dkim["present"] else None, delta_color="inverse")
+                st.progress(100 if dkim["present"] else 0)
+            with col3:
+                spf_status = "✅" if spf["present"] else "❌"
+                st.metric(label="SPF", value=spf_status, delta=spf["recommendation"] if not spf["present"] else None, delta_color="inverse")
+                st.progress(100 if spf["present"] else 0)
+            with col4:
+                mx_status = "✅" if mx["present"] else "❌"
+                st.metric(label="MX", value=mx_status, delta=mx["recommendation"] if not mx["present"] else None, delta_color="inverse")
+                st.progress(100 if mx["present"] else 0)
+            with col5:
+                bimi_status = "✅" if bimi["present"] else "❌"
+                st.metric(label="BIMI", value=bimi_status, delta=bimi["recommendation"] if not bimi["present"] else None, delta_color="inverse")
+                st.progress(100 if bimi["present"] else 0)
+            with col6:
+                mta_sts_status = "✅" if mta_sts["present"] else "❌"
+                st.metric(label="MTA-STS", value=mta_sts_status, delta=mta_sts["recommendation"] if not mta_sts["present"] else None, delta_color="inverse")
+                st.progress(100 if mta_sts["present"] else 0)
+            
+            # Detailed Tables
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**DMARC**")
+                st.table({k: [v] for k, v in dmarc.items() if k != "recommendation"})
+                st.markdown(dmarc["recommendation"])
+            with col2:
+                st.markdown("**DKIM**")
+                st.table({k: [v] for k, v in dkim.items() if k not in ["selectors", "recommendation"]})
+                st.markdown(dkim["recommendation"])
+                if dkim["selectors"]:
+                    st.write("Selectors:", dkim["selectors"])
+            st.markdown("**SPF**")
+            st.table({k: [v] for k, v in spf.items() if k != "recommendation"})
+            st.markdown(spf["recommendation"])
+            st.markdown("**MX**")
+            st.table({k: [v] for k, v in mx.items() if k not in ["records", "tls"]})
+            if mx["records"]:
+                st.write("Records:", "\n".join([f"Priority {p}: {t}" for p, t in mx["records"]]))
+                st.write("TLS Support:", "\n".join([f"{h}: {'✅' if tls else '❌' if tls is not None else 'N/A'}" for h, tls in mx["tls"].items()]))
+            st.markdown(mx["recommendation"])
+            st.markdown("**BIMI**")
+            st.table({k: [v] for k, v in bimi.items() if k != "recommendation"})
+            st.markdown(bimi["recommendation"])
+            st.markdown("**MTA-STS**")
+            st.table({k: [v] for k, v in mta_sts.items() if k != "recommendation"})
+            st.markdown(mta_sts["recommendation"])
+            
+            # PDF Download
+            pdf = generate_pdf_report(domain, dmarc, dkim, spf, mx, bimi, mta_sts, score)
+            st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
 st.markdown("---")
 st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries")
