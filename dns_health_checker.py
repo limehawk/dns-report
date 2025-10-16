@@ -1,6 +1,5 @@
 import streamlit as st
 import dns.resolver
-import dns.exception
 import re
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
@@ -18,7 +17,15 @@ def fetch_txt_record(domain, subdomain=""):
         full_domain = f"{subdomain}.{domain}" if subdomain else domain
         answers = dns.resolver.resolve(full_domain, 'TXT')
         return [str(rdata).strip('"') for rdata in answers]  # Flatten to list of strings
-    except (dns.exception.NXDOMAIN, dns.exception.NoAnswer, dns.resolver.Timeout):
+    except dns.resolver.NXDOMAIN:
+        return []  # Domain doesn't exist
+    except dns.resolver.NoAnswer:
+        return []  # No TXT records
+    except dns.resolver.Timeout:
+        st.error(f"⏳ Timeout querying {full_domain}")
+        return []
+    except Exception as e:
+        st.error(f"❌ DNS Error: {e}")
         return []
 
 def analyze_records(domain):
