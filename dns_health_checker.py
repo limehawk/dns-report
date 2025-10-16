@@ -56,13 +56,17 @@ def analyze_records(domain):
     common_selectors = ["google", "default", "selector1", "selector2"]
     dkim_count = 0
     dkim_selectors = []
+    dkim_present = False
     for selector in common_selectors:
         dkim_records = fetch_txt_record(domain, f"{selector}._domainkey")
         for txt in dkim_records:
             if "v=dkim1" in txt.lower():
                 dkim_count += 1
                 dkim_selectors.append(f"{selector}: {txt[:50]}...")
-    dkim = {"present": dkim_count > 0, "count": dkim_count, "selectors": dkim_selectors, "reasoning": "DKIM missing—emails lack sender verification, hurting trust.", "recommendation": "Add selectors for verified sending"}
+                dkim_present = True
+    dkim = {"present": dkim_present, "count": dkim_count, "selectors": dkim_selectors,
+            "reasoning": "DKIM present with valid records, enhancing email trust." if dkim_present else "DKIM missing—emails lack sender verification, hurting trust.",
+            "recommendation": "Maintain and rotate keys annually" if dkim_present else "Add selectors for verified sending"}
     
     return dmarc, dkim, spf
 
