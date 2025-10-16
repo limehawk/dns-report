@@ -10,6 +10,8 @@ from io import BytesIO
 from urllib.parse import urlparse
 import smtplib
 import ssl
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 MSP_NAME = "LimeHawk MSP"
 MSP_CONTACT = "Contact: sales@limehawk.com | 1-800-MSP-HELP"
@@ -48,13 +50,15 @@ def fetch_mx_records(domain):
 def check_tls(mx_host, port=25):
     try:
         context = ssl.create_default_context()
-        with smtplib.SMTP(mx_host, port, timeout=10) as server:
+        with smtplib.SMTP(mx_host, port, timeout=10) as server:  # Reduced to 10s
+            server.ehlo()
             server.starttls(context=context)
+            server.ehlo()
         return True
     except (smtplib.SMTPNotSupportedError, ssl.SSLError, smtplib.SMTPServerDisconnected):
         return False
     except Exception:
-        return None  # Timeout or other failure
+        return None
 
 def analyze_records(domain):
     spf_records = fetch_txt_record(domain)
@@ -99,9 +103,11 @@ def analyze_records(domain):
     
     mx_records = fetch_mx_records(domain)
     mx_tls = {}
-    for priority, host in mx_records:
-        tls_result = check_tls(host)
-        mx_tls[host] = tls_result
+    if mx_records:
+        with ThreadPoolExecutor(max_workers=min(len(mx_records), 4)) as executor:
+            future_to_host = {executor.submit(check_tls, host): host for _, host in mx_records}
+            for future in future_to_host:
+                mx_tls[future_to_host[future]] = future.result(timeout=15)  # Overall timeout per check
     mx = {"present": bool(mx_records), "records": mx_records, "tls": mx_tls,
           "reasoning": "No MX records—email delivery will fail." if not mx_records else 
                        "Single MX record detected—consider adding a backup for redundancy." if len(mx_records) == 1 else
@@ -268,15 +274,13 @@ if submit_button:
         st.error("Enter at least one domain!")
     else:
         all_results = {}
-        for domain in domains:
-            # Sanitize domain input
-            domain = urlparse(domain).netloc if '://' in domain else domain.strip('/')
-            domain = domain.lstrip('www.')  # Optional: strip www. for cleaner DNS lookups
-            if not domain:
-                st.error(f"Invalid domain format for '{domain_input}'. Skipping.")
-                continue
-            
-            with st.spinner(f"🔍 Querying DNS records for {domain}..."):
+        with st.spinner("🔍 Querying DNS records for all domains..."):
+            for domain in domains:
+                domain = urlparse(domain).netloc if '://' in domain else domain.strip('/')
+                domain = domain.lstrip('www.')
+                if not domain:
+                    st.error(f"Invalid domain format for '{domain_input}'. Skipping.")
+                    continue
                 dmarc, dkim, spf, mx, bimi, mta_sts = analyze_records(domain)
                 score = compute_score(dmarc, dkim, spf, mx, bimi, mta_sts)
                 all_results[domain] = {"dmarc": dmarc, "dkim": dkim, "spf": spf, "mx": mx, "bimi": bimi, "mta_sts": mta_sts, "score": score}
