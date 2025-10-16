@@ -261,3 +261,5 @@ if submit_button:
             pdf = generate_pdf_report(domain, dmarc, dkim, spf, score, wordpress_analysis)
             st.download_button("💾 Download Sales PDF", pdf.getvalue(), f"{domain}_dns_report.pdf", "application/pdf")
 
+st.markdown("---")
+st.markdown(f"**{MSP_NAME}** | {MSP_CONTACT} | Powered by Direct DNS Queries")
